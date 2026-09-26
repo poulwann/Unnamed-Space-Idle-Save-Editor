@@ -1,0 +1,10 @@
+{"version":"0.85.2.2"}
+{"compatibility_version":36}
+{"save_name":"Themes","theme":"Default"}
+{"cores":[{"core_id":"LaserCannon","node":null,"tier":1}],"future_field":{"nested":[true,null,{"value":7}]},"misc_stats":{"highest_sector":50},"resource_totals_gained_load":{"Salvage":20000},"resources_load":{"AIPoint":42,"ResearchData":10000000000000000159028911097599180468360808563945281389781327557747838772170381060813469985856815104.0,"Salvage":12345.5},"save_name":"PlayerInfo","ships_load":{"Basic":{"locked":false}},"unicode_note":"船 🚀 café"}
+{"amount_have":0,"save_name":"PiercingMonotony"}
+{"inventory_data":{"slot1":{"name":"Damage","protect":true,"resonance":2.5},"slot2":null},"save_name":"VoidDeviceArea"}
+{"recipes_load":{"sample":{"cost":[{"amount":10,"resource":"Salvage"}],"level":4,"locked":false}},"save_name":"Recipes"}
+{"modules_load":{"sample":{"active":true,"level":3,"locked":false,"tier":1}},"save_name":"Modules"}
+{"custom":{"empty":[],"flag":false,"text":"preserve me"},"save_name":"UnknownFutureRecord"}
+{"timestamp":1700000000}
