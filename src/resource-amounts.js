@@ -1,5 +1,9 @@
 import { makeNumeric, numericText } from "./codec.js";
 
+// PlayerInfo.gd stores balances as Godot floats; NumberUtils.gd formats floats.
+// One tenth of the largest finite binary64 value leaves arithmetic headroom.
+export const MAX_RESOURCE_AMOUNT = "1.7976931348623157e307";
+
 // Work limits, not balance caps. They bound every BigInt and decimal expansion.
 const MAX_DIGITS = 4096;
 const MAX_EXPONENT = 4096;

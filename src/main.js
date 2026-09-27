@@ -9,7 +9,11 @@ import {
 } from "./codec.js";
 import catalog from "./catalog.json";
 import "./style.css";
-import { addResourceAmount, fillResourceAmount } from "./resource-amounts.js";
+import {
+  addResourceAmount,
+  fillResourceAmount,
+  MAX_RESOURCE_AMOUNT,
+} from "./resource-amounts.js";
 import {
   buildCategoryEntries,
   getFieldPolicy,
@@ -43,6 +47,15 @@ const achievements = new Map(
 const resourceCatalog = new Map(
   catalog.resources.map((item) => [item.id, item]),
 );
+// Recipe outputs and non-Time inputs come from recovered CastleDB data.
+const maxMaterialIds = catalog.resources
+  .filter(
+    (item) =>
+      item.recipeId ||
+      item.usedBy.length ||
+      ["Salvage", "VoidMatter", "VoidEnergy"].includes(item.id),
+  )
+  .map((item) => item.id);
 const formats = {
   godot4: "Godot 4 encrypted",
   godot3: "Godot 3 encrypted",
@@ -970,7 +983,10 @@ function resourceBalance(id) {
 function applyResourceAction(ids, mode) {
   if (!canNavigate()) return;
   try {
-    const target = $("#resource-fill-target").value.trim();
+    const target =
+      mode === "max"
+        ? MAX_RESOURCE_AMOUNT
+        : $("#resource-fill-target").value.trim();
     // Precompute the entire transaction: an invalid value cannot leave a
     // partially edited group. Arithmetic never passes through JS Number.
     const edits = ids.map((id) => {
@@ -994,11 +1010,18 @@ function applyResourceAction(ids, mode) {
       );
       return;
     }
-    const description = mode === "add" ? "Add 1e9 to" : `Fill to ${target} for`;
+    const description =
+      mode === "add"
+        ? "Add 1e9 to"
+        : mode === "max"
+          ? "Fill to resource target for"
+          : `Fill to ${target} for`;
     if (
       ids.length > 1 &&
       !confirm(
-        `${description} ${changed.length} resources in this shown group? Missing balances will be added. Higher balances are never reduced by Fill. This is one undoable change.`,
+        mode === "max"
+          ? `Fill ${changed.length} balances to ${MAX_RESOURCE_AMOUNT}?\n\nIncludes all standard and alien synth materials, raw ingredients, Salvage, Void Matter, and Void Energy, regardless of search. Missing balances will be added; higher balances are not reduced. Recipes, unlocks, and lifetime totals stay unchanged.\n\nThis is one tenth of the largest finite Godot float, leaving arithmetic headroom. It is not a gameplay cap; later calculations can still overflow. Keep a backup.\n\nThis is one undoable change.`
+          : `${description} ${changed.length} resources in this shown group? Missing balances will be added. Higher balances are never reduced by Fill. This is one undoable change.`,
       )
     )
       return;
@@ -1189,12 +1212,20 @@ function renderResources(workspace) {
       }),
     );
   }
+  const maxMaterials = button(
+    "Max synth materials + salvage + void",
+    () => applyResourceAction(maxMaterialIds, "max"),
+    "button primary",
+  );
+  maxMaterials.id = "resource-max-materials";
+  maxMaterials.title = `Fill all ${maxMaterialIds.length} synth material, raw ingredient, Salvage, Void Matter, and Void Energy balances to ${MAX_RESOURCE_AMOUNT} (one tenth of the numeric maximum), regardless of search. One undoable change.`;
   controls.append(
     fillLabel,
+    maxMaterials,
     node(
       "p",
       "muted",
-      "Fill raises balances to your target, never lowers them. No universal game cap; Infinity is not used.",
+      `Fill never lowers balances. Max fills all synth materials, raw ingredients, Salvage, Void Matter, and Void Energy to ${MAX_RESOURCE_AMOUNT}, regardless of search. This is one tenth of the numeric maximum, leaving headroom; later calculations can still overflow. Keep a backup.`,
     ),
     folds,
   );
@@ -1267,7 +1298,7 @@ function renderResources(workspace) {
     node(
       "p",
       "resource-result-count",
-      `${shownCount} resource${shownCount === 1 ? "" : "s"} in ${groupList.childElementCount} group${groupList.childElementCount === 1 ? "" : "s"}${state.query ? " · Matching groups opened automatically. Bulk actions affect only shown results." : " · Expand a group to edit its balances."}`,
+      `${shownCount} resource${shownCount === 1 ? "" : "s"} in ${groupList.childElementCount} group${groupList.childElementCount === 1 ? "" : "s"}${state.query ? " · Matching groups opened automatically. Group actions affect only shown results; Max synth ignores search." : " · Expand a group to edit its balances."}`,
     ),
   );
   if (!shownCount)
