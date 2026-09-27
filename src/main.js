@@ -1792,6 +1792,18 @@ function renderResources(workspace) {
     }
   });
   fillLabel.append(target);
+  const shortcuts = node("div", "resource-quick-actions");
+  for (const [id, name] of [
+    ["Salvage", "Salvage"],
+    ["WarpEssence", "Warp Essence"],
+  ]) {
+    const max = button(`Max ${name}`, () =>
+      applyResourceAction([id], "max", name),
+    );
+    max.id = `quick-max-${id}`;
+    max.title = `Fill only ${name} to ${MAX_RESOURCE_AMOUNT}. Other balances stay unchanged; later calculations can still overflow.`;
+    shortcuts.append(max);
+  }
   const folds = node("div", "resource-fold-actions");
   for (const [text, open] of [
     ["Expand all", true],
@@ -1811,6 +1823,7 @@ function renderResources(workspace) {
   }
   controls.append(
     fillLabel,
+    shortcuts,
     folds,
     node(
       "p",

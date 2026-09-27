@@ -8,6 +8,10 @@ per-resource actions. Coverage includes synthesis materials and ingredients,
 Salvage, Void Matter, Void Energy, Synth Points, warp currencies, base materials,
 components, and their supported banked balances.
 
+**Max Salvage** and **Max Warp Essence** are also available directly in the
+Resources toolbar. They remain visible with resource groups collapsed or search
+filters active, and each changes only its named balance.
+
 Each balance action fills only that resource to `1.7976931348623157e307`, adds a
 missing balance, and never lowers a higher one. Other balances, layouts, upgrades,
 unlocks, and lifetime totals remain unchanged. Confirmation and one-step undo
