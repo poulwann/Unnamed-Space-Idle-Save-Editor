@@ -25,6 +25,11 @@ import {
   planOverflowRepairs,
 } from "./save-repair.js";
 import { planCrewMastery } from "./crew-mastery.js";
+import { planUpgradeMaximum, savedUpgradeId } from "./focused-actions.js";
+import { planSpecPoints } from "./spec-points.js";
+import { planNestedBoost } from "./nested-boosts.js";
+import { planRecipeMaximum } from "./recipe-boosts.js";
+import { planChallengeMaximum } from "./challenge-boosts.js";
 
 const $ = (selector) => document.querySelector(selector);
 const app = $("#app");
@@ -52,26 +57,49 @@ const achievements = new Map(
 const resourceCatalog = new Map(
   catalog.resources.map((item) => [item.id, item]),
 );
-// Recipe outputs and non-Time inputs come from recovered CastleDB data.
-const maxMaterialIds = catalog.resources
-  .filter(
-    (item) =>
-      item.recipeId ||
-      item.usedBy.length ||
-      ["Salvage", "VoidMatter", "VoidEnergy"].includes(item.id),
-  )
-  .map((item) => item.id);
-// CastleDB's Warp/Base types include every building input/output. PlayerInfo.gd
-// banks base components under "Banked" + resource ID on prestige.
-const maxWarpBaseIds = catalog.resources
-  .filter(
-    (item) =>
-      item.type === "Warp" ||
-      item.type === "Base" ||
-      (item.id.startsWith("Banked") &&
-        resourceCatalog.get(item.id.slice(6))?.type === "Base"),
-  )
-  .map((item) => item.id);
+// Individual maxima preserve the former material coverage without combining
+// unrelated balances into a single action.
+const maximumResourceIds = new Set(
+  catalog.resources
+    .filter(
+      (item) =>
+        item.recipeId ||
+        item.usedBy.length ||
+        ["Salvage", "VoidMatter", "VoidEnergy", "SynthPoint"].includes(
+          item.id,
+        ) ||
+        item.type === "Warp" ||
+        item.type === "Base" ||
+        (item.id.startsWith("Banked") &&
+          resourceCatalog.get(item.id.slice(6))?.type === "Base"),
+    )
+    .map((item) => item.id),
+);
+const mechanicSearch = new Map(
+  Object.entries(catalog.categoryMetadata.mechanics).map(([id, mechanic]) => [
+    id,
+    [
+      id,
+      mechanic.name,
+      mechanic.group,
+      mechanic.description,
+      ...[
+        ...Object.keys(mechanic.upgrades),
+        ...Object.keys(mechanic.coupledUpgrades),
+        ...mechanic.uncapped,
+        ...mechanic.unsupported,
+      ].map(
+        (source) =>
+          `${source} ${catalog.categoryMetadata.entities.upgrades[source]?.name || ""}`,
+      ),
+      ...mechanic.otherSources.map(
+        (source) => `${source.id} ${source.name} ${source.family}`,
+      ),
+    ]
+      .join(" ")
+      .toLowerCase(),
+  ]),
+);
 const formats = {
   godot4: "Godot 4 encrypted",
   godot3: "Godot 3 encrypted",
@@ -82,6 +110,7 @@ const formats = {
 const views = [
   "All records",
   "Resources",
+  "Boosts & costs",
   "Achievements",
   "Inventory",
   "Progression",
@@ -296,7 +325,9 @@ function renderNavigation() {
           ? catalog.resources.length
           : view === "Achievements"
             ? catalog.achievements.length
-            : categoryCounts.get(view) || 0;
+            : view === "Boosts & costs"
+              ? Object.keys(catalog.categoryMetadata.mechanics).length
+              : categoryCounts.get(view) || 0;
     const el = button(
       "",
       () => {
@@ -329,6 +360,10 @@ function renderWorkspace() {
   }
   if (state.view === "Resources") {
     renderResources(workspace);
+    return;
+  }
+  if (state.view === "Boosts & costs") {
+    renderMechanics(workspace);
     return;
   }
   if (state.view === "Achievements") {
@@ -705,6 +740,463 @@ function crewMasteryButton() {
   control.title =
     "Fund all active mastery upgrades by raising unlocked crew mastery levels and reconciling unspent points. Unlike the resource maxima, this does not use an extreme floating-point target.";
   return control;
+}
+
+function upgradeMaximumButton(id, label, limits, description, available) {
+  const control = button(label, () => {
+    if (!canNavigate()) return;
+    try {
+      const plan = planUpgradeMaximum(state.records, catalog, limits);
+      if (!plan.changes.length) {
+        notice("These available upgrades are already at their source caps.");
+        return;
+      }
+      const names = plan.upgrades
+        .map((u) => `${u.name}: level ${u.level}`)
+        .join("\n");
+      if (
+        !confirm(
+          `${label}?\n\n${description}\n\n${names}\n\nAffected effects: ${plan.effects.join("; ")}.\n\nOnly the listed saved upgrade counters change. Locked and missing upgrades, balances, allocations and unlock flags stay unchanged. Levels are granted without paying costs. The game can trigger its normal unlock, milestone or transition checks on loading these levels. Higher existing levels are preserved; uncapped and dynamically capped sources are not changed.\n\nThis is one undoable change.`,
+        )
+      )
+        return;
+      commit(() => {
+        for (const { path, value } of plan.changes) put(path, value);
+      }, true);
+      notice(
+        `${label}: updated ${plan.upgrades.length} upgrades. The game recalculates affected stats and derived balances on load.`,
+      );
+    } catch (error) {
+      notice(`Upgrade action not applied: ${error.message}`, true);
+    }
+  });
+  control.id = `max-upgrades-${id}`;
+  control.title = description;
+  if (available) {
+    control.disabled = !Object.keys(limits).some((key) => available.has(key));
+    if (control.disabled)
+      control.title +=
+        " No unlocked saved upgrades with supported counters are available.";
+  }
+  return control;
+}
+
+function availableUpgradeIds() {
+  return new Set(
+    state.records
+      .filter(
+        (r) =>
+          r.unlocked !== false &&
+          own(r, "amount_have") &&
+          own(r, "amount_purchased") &&
+          catalog.categoryMetadata.entities.upgrades[savedUpgradeId(r, catalog)]
+            ?.actionable,
+      )
+      .map((r) => savedUpgradeId(r, catalog)),
+  );
+}
+
+function focusedActions() {
+  const section = node("details", "focused-actions");
+  section.open = !state.query;
+  section.append(
+    node(
+      "summary",
+      "",
+      "Focused actions · speeds, points and recipe progression",
+    ),
+  );
+  const grid = node("div", "focused-actions-grid");
+  const available = availableUpgradeIds();
+  for (const [target, title, description] of [
+    [
+      "synth_speed",
+      "Max synth-speed upgrades",
+      "Max available dedicated Synth Point speed upgrades. Standard speed also contributes its tenth root to alien synthesis. Recipes, materials and points are not edited; this is not a universal speed cap.",
+    ],
+    [
+      "fixture_speed",
+      "Max fixture-speed upgrades",
+      "Max available dedicated Synth Point fixture-creation upgrades. Fixture Points, active fixtures and queues are not edited. Other speed bonuses remain unchanged.",
+    ],
+    [
+      "compute_base_spec_points",
+      "Max starting spec-point bonuses",
+      "Max available dedicated Synth/Warp starting-point upgrades: up to 15 bonus points across all six sources. Compute tiers and purchased specializations are not edited. The game recalculates available points.",
+    ],
+    [
+      "research_datacore_start_with",
+      "Max starting Data Core bonuses",
+      "Max available Warp starting-core upgrades: up to 21 bonus cores across all five sources. Cleared sectors, assigned cores and automation stay unchanged. The game recalculates available cores.",
+    ],
+  ]) {
+    const card = node("div", "focused-action");
+    card.append(
+      upgradeMaximumButton(
+        target,
+        title,
+        catalog.categoryMetadata.quickUpgrades[target],
+        description,
+        available,
+      ),
+      node("p", "muted", description),
+    );
+    grid.append(card);
+  }
+  const points = node("div", "focused-action");
+  const maxPoints = button("Max Synth Points", () =>
+    applyResourceAction(["SynthPoint"], "max", "Synth Points"),
+  );
+  maxPoints.id = "quick-max-synth-points";
+  points.append(
+    maxPoints,
+    node(
+      "p",
+      "muted",
+      `Fill only the spendable Synth Point balance to ${MAX_RESOURCE_AMOUNT}. Does not change recipes or buy upgrades. This extreme numeric target is not a gameplay cap.`,
+    ),
+  );
+  grid.append(points);
+  const mastery = node("div", "focused-action");
+  mastery.append(
+    crewMasteryButton(),
+    node(
+      "p",
+      "muted",
+      "Fund every active crew mastery upgrade through earned mastery levels, then reconcile unspent points. Separate from Mastery Components.",
+    ),
+  );
+  grid.append(mastery);
+  const specialization = node("div", "focused-action");
+  specialization.append(
+    specPointsButton(),
+    node(
+      "p",
+      "muted",
+      "Progression-changing alternative: raise unlocked fighter compute tiers until every specialization is funded. Rejects unsafe tier costs; does not buy specializations.",
+    ),
+  );
+  grid.append(specialization);
+  for (const [mode, title, description] of [
+    [
+      "materialCosts",
+      "Max recipe material-cost reductions",
+      "Raise relevant unlocked recipe levels to their source caps. All reached recipe rewards also apply, including unlocks and infinite production. Does not lower core upgrade prices.",
+    ],
+    [
+      "craftTime",
+      "Max recipe crafting-time reductions",
+      "Raise unlocked recipes with Time-cost reductions to their source level caps. Recipe rewards are coupled; this is separate from the synth-speed stat.",
+    ],
+    [
+      "output",
+      "Max recipe output rewards",
+      "Raise unlocked recipes with output rewards to their source level caps. The preview lists all coupled recipe rewards.",
+    ],
+    [
+      "fixturePoints",
+      "Max recipe-backed Fixture Points",
+      "Max relevant unlocked recipe levels and reconcile Fixture Points from source-earned rewards. This increases the recipe-based fixture-speed bonus and can lower an inconsistent edited balance.",
+    ],
+  ]) {
+    const card = node("div", "focused-action");
+    card.append(
+      plannedActionButton(
+        `recipe-${mode}`,
+        title,
+        () => planRecipeMaximum(state.records, catalog, mode),
+        description,
+      ),
+      node("p", "muted", description),
+    );
+    grid.append(card);
+  }
+  section.append(grid);
+  return section;
+}
+
+function specPointsButton() {
+  const control = button("Fund all specialization points", () => {
+    if (!canNavigate()) return;
+    try {
+      const plan = planSpecPoints(state.records, catalog);
+      if (!plan.changes.length) {
+        notice(
+          "Specialization already funds every source upgrade; the balance is consistent.",
+        );
+        return;
+      }
+      if (
+        !confirm(
+          `Fund all ${plan.requiredTotal} specialization points?\n\nRaise tiers on ${plan.raisedFighters} unlocked fighters to reach ${plan.totalTiers} total compute tiers. Reconcile available Spec Points to ${plan.available} (${plan.total} earned minus ${plan.spent} spent).\n\nThis changes fighter compute progression and its combat/resource bonuses. Actual specializations are NOT purchased; tradeoffs, allocations, progress, unlocks and loadouts stay unchanged. An inconsistent edited point balance may be lowered. The planner rejects tiers whose next cost or full-tier work would overflow, but cannot guarantee every later gameplay calculation.\n\nThis is one undoable change.`,
+        )
+      )
+        return;
+      commit(() => {
+        const player = state.records[plan.playerIndex];
+        if (!own(player, "resources_load"))
+          define(player, "resources_load", {});
+        for (const { path, value } of plan.changes) put(path, value);
+      }, true);
+      notice(
+        `Specialization funded: ${plan.available} points available (${plan.total} earned, ${plan.spent} spent).`,
+      );
+    } catch (error) {
+      notice(`Specialization funding not applied: ${error.message}`, true);
+    }
+  });
+  control.id = "resource-fund-spec-points";
+  control.title =
+    "Fund the full specialization budget using unlocked fighter compute tiers, with source cost-safety checks. Separate from maxing starting-point bonuses.";
+  return control;
+}
+
+function plannedActionButton(id, label, makePlan, description) {
+  const control = button(label, () => {
+    if (!canNavigate()) return;
+    try {
+      const plan = makePlan();
+      if (!plan.changes.length) {
+        const reasons = [
+          ...new Set(
+            [...(plan.skipped || []), ...(plan.unsupported || [])].map(
+              (item) => item.reason,
+            ),
+          ),
+        ];
+        notice(
+          `No changes: already capped or no eligible contributors. ${reasons.join(" ")}`,
+        );
+        return;
+      }
+      jsonDialog(
+        label,
+        stringifyJson(
+          {
+            selected: plan.items,
+            effects: plan.effects,
+            skipped: plan.skipped || [],
+            unsupported: plan.unsupported || [],
+            changes: plan.changes.map(({ path, value }) => ({
+              path: path.join("."),
+              before: path.reduce((entry, key) => entry?.[key], state.records),
+              after: value,
+            })),
+          },
+          2,
+        ),
+        () => {
+          commit(() => {
+            if (
+              plan.playerIndex !== undefined &&
+              !own(state.records[plan.playerIndex], "resources_load")
+            )
+              define(state.records[plan.playerIndex], "resources_load", {});
+            for (const { path, value } of plan.changes) put(path, value);
+          }, true);
+          notice(
+            `${label}: applied ${plan.changes.length} saved-value changes. Undo restores the entire action.`,
+          );
+        },
+        `${description} Review the complete read-only preview, including coupled effects. Apply makes one undoable change.`,
+        false,
+        true,
+      );
+    } catch (error) {
+      notice(`Action not applied: ${error.message}`, true);
+    }
+  });
+  control.id = `focused-${id}`;
+  control.title = description;
+  return control;
+}
+
+function renderMechanics(workspace) {
+  workspace.append(
+    heading(
+      "Boosts & costs",
+      "One action per source-defined mechanic. Max dedicated upgrades changes only single-effect contributors. Coupled upgrades are a separate, explicitly confirmed choice. These are available upgrade caps—not universal stat maxima.",
+    ),
+  );
+  workspace.append(
+    node(
+      "p",
+      "mechanic-notice",
+      "Core pricing: Laser Cannon costs grow exponentially while its direct damage grows linearly. This recovered version has no Laser Cannon/core price-divider source. Search Combat Enhancer, damage, or Salvage for independent boosts; banked Battle Components are a separate balance in Resources. Reactor and building cost reductions do not discount weapon cores.",
+    ),
+  );
+  const available = availableUpgradeIds();
+  const groups = new Map();
+  const query = state.query.toLowerCase();
+  for (const [id, mechanic] of Object.entries(
+    catalog.categoryMetadata.mechanics,
+  )) {
+    if (query && !mechanicSearch.get(id).includes(query)) continue;
+    if (!groups.has(mechanic.group)) groups.set(mechanic.group, []);
+    groups.get(mechanic.group).push([id, mechanic]);
+  }
+  const list = node("div", "category-groups");
+  workspace.append(categoryFoldControls(list), list);
+  for (const [group, mechanics] of groups) {
+    list.append(
+      categoryDisclosure(
+        `mechanics:${group}`,
+        group,
+        mechanics.length,
+        (details) => {
+          for (const [id, mechanic] of mechanics) {
+            const row = node("div", "resource-row mechanic-row");
+            const label = node("div", "resource-label");
+            label.append(
+              node("strong", "", mechanic.name),
+              node("code", "", id),
+            );
+            if (mechanic.description)
+              label.append(
+                node("small", "field-description", mechanic.description),
+              );
+            label.append(
+              node(
+                "small",
+                "field-description",
+                `${Object.keys(mechanic.upgrades).length} dedicated, ${Object.keys(mechanic.coupledUpgrades).length} coupled ordinary capped sources; ${mechanic.uncapped.length} uncapped/dynamic, ${mechanic.unsupported.length} owner-specific capped, ${mechanic.otherSources.length} other source contributors. No universal stat maximum is assumed.`,
+              ),
+            );
+            const actions = node("div", "resource-quick-actions");
+            actions.append(
+              upgradeMaximumButton(
+                id,
+                "Max dedicated upgrades",
+                mechanic.upgrades,
+                `Max source-capped single-effect upgrades for ${mechanic.name}. No unrelated upgrade effects are selected.`,
+                available,
+              ),
+            );
+            if (Object.keys(mechanic.coupledUpgrades).length) {
+              actions.append(
+                upgradeMaximumButton(
+                  `${id}-coupled`,
+                  "Max with coupled effects",
+                  { ...mechanic.upgrades, ...mechanic.coupledUpgrades },
+                  `Max source-capped contributors to ${mechanic.name}, INCLUDING upgrades with other effects. The full affected-effect list is shown below; those other bonuses, tradeoffs and unlock effects also apply.`,
+                  available,
+                ),
+              );
+            }
+            const nested = catalog.categoryMetadata.nestedBoosts.targets[id];
+            if (nested) {
+              for (const [kind, collection, title] of [
+                ["module", "modules", "active modules"],
+                ["shard", "shards", "equipped shards"],
+              ]) {
+                if (!nested[collection].length) continue;
+                for (const coupled of [false, true]) {
+                  actions.append(
+                    plannedActionButton(
+                      `${id}-${kind}${coupled ? "-coupled" : ""}`,
+                      `Max ${title}${coupled ? " · coupled" : " · dedicated"}`,
+                      () =>
+                        planNestedBoost(
+                          state.records,
+                          catalog,
+                          id,
+                          kind,
+                          coupled,
+                        ),
+                      `Max source-capped saved authorities for ${mechanic.name} on ${title}. ${coupled ? "Other effects on the same contributor are included and listed in the preview." : "Contributors with other effects are excluded."} Equipment, activation, unlocks and inventory remain unchanged.`,
+                    ),
+                  );
+                }
+              }
+            }
+            for (const challenge of catalog.categoryMetadata.challengeBoosts
+              .challenges) {
+              if (
+                mechanic.otherSources.some(
+                  (source) =>
+                    source.family === "challenges" &&
+                    source.id === challenge.id,
+                )
+              ) {
+                actions.append(
+                  plannedActionButton(
+                    `challenge-${challenge.id}-${id}`,
+                    `Max ${challenge.name} rewards`,
+                    () =>
+                      planChallengeMaximum(
+                        state.records,
+                        catalog,
+                        challenge.id,
+                      ),
+                    `Complete the ${challenge.maxCompletions} source reward tiers of ${challenge.name}. ${challenge.descriptions.join(" ")} Challenge rewards may have coupled effects; active run settings and sector histories are not changed.`,
+                  ),
+                );
+              }
+            }
+            const sources = node("details", "mechanic-sources");
+            sources.append(
+              node("summary", "", "Sources, limits and exclusions"),
+            );
+            let drawn = false;
+            sources.addEventListener("toggle", () => {
+              if (!sources.open || drawn) return;
+              drawn = true;
+              const list = node("ul");
+              for (const [coupled, limits] of [
+                [false, mechanic.upgrades],
+                [true, mechanic.coupledUpgrades],
+              ]) {
+                for (const [source, cap] of Object.entries(limits))
+                  list.append(
+                    node(
+                      "li",
+                      "",
+                      `${catalog.categoryMetadata.entities.upgrades[source]?.name || source}: cap ${cap}; ${coupled ? "coupled" : "dedicated"}; ${available.has(source) ? "available in this save" : "missing, locked or unsupported saved counters"}.`,
+                    ),
+                  );
+              }
+              for (const source of mechanic.uncapped)
+                list.append(
+                  node(
+                    "li",
+                    "",
+                    `${catalog.categoryMetadata.entities.upgrades[source]?.name || source}: uncapped or dynamic cap; ordinary action does not change it.`,
+                  ),
+                );
+              for (const source of mechanic.unsupported)
+                list.append(
+                  node(
+                    "li",
+                    "",
+                    `${catalog.categoryMetadata.entities.upgrades[source]?.name || source}: owner-specific or derived progression; ordinary action does not change it.`,
+                  ),
+                );
+              for (const source of mechanic.otherSources)
+                list.append(
+                  node(
+                    "li",
+                    "",
+                    `${source.name} (${source.family}): separate system authority; not an ordinary upgrade-counter edit.`,
+                  ),
+                );
+              sources.append(list);
+            });
+            label.append(sources);
+            row.append(label, actions);
+            details.append(row);
+          }
+        },
+      ),
+    );
+  }
+  if (!groups.size)
+    workspace.append(
+      node(
+        "div",
+        "empty-panel",
+        "No source-defined mechanics match this search.",
+      ),
+    );
 }
 
 function renderRecords(workspace) {
@@ -1111,10 +1603,10 @@ function applyResourceAction(ids, mode, maxScope) {
           ? "Fill to resource target for"
           : `Fill to ${target} for`;
     if (
-      ids.length > 1 &&
+      (ids.length > 1 || mode === "max") &&
       !confirm(
         mode === "max"
-          ? `Fill ${changed.length} balances to ${MAX_RESOURCE_AMOUNT}?\n\nIncludes ${maxScope}, regardless of search. Missing balances will be added; higher balances are not reduced. Layouts, recipes, upgrades, unlocks, and lifetime totals stay unchanged.\n\nThis is one tenth of the largest finite Godot float, leaving arithmetic headroom. It is not a gameplay cap; later calculations can still overflow. Repair overflow values will reset balances at this target. Keep a backup.\n\nThis is one undoable change.`
+          ? `Fill ${maxScope} to ${MAX_RESOURCE_AMOUNT}?\n\nOnly this balance changes. A missing balance will be added; a higher balance is not reduced. Layouts, recipes, upgrades, unlocks, and lifetime totals stay unchanged.\n\nThis is one tenth of the largest finite Godot float, not a gameplay cap; later calculations can still overflow. Repair overflow values will reset a balance at this target. Keep a backup.\n\nThis is one undoable change.`
           : `${description} ${changed.length} resources in this shown group? Missing balances will be added. Higher balances are never reduced by Fill. This is one undoable change.`,
       )
     )
@@ -1156,6 +1648,17 @@ function resourceActionButtons(ids, suffix, bulk = false) {
   fill.title = `Raise lower balances to the chosen target (${state.resourceFillTarget}); never reduce higher balances. This is not a game maximum.`;
   add.disabled = fill.disabled = eligible.length === 0;
   actions.append(add, fill);
+  if (!bulk && maximumResourceIds.has(ids[0])) {
+    const id = ids[0];
+    const name = resourceCatalog.get(id)?.name || pretty(id);
+    const max = button("Max balance", () =>
+      applyResourceAction([id], "max", name),
+    );
+    max.id = `resource-max-${id}`;
+    max.title = `Fill only ${name} to ${MAX_RESOURCE_AMOUNT}. No other balance changes.`;
+    max.disabled = eligible.length === 0;
+    actions.append(max);
+  }
   return actions;
 }
 
@@ -1249,7 +1752,7 @@ function renderResources(workspace) {
   workspace.append(
     heading(
       "Resources & points",
-      "Game-defined materials and recipe tiers. Change individual balances or a whole group; lifetime totals, recipes, and unlocks stay unchanged.",
+      "Game-defined materials and recipe tiers. Balance actions change only selected balances; focused upgrade actions explain their separate progression effects.",
     ),
   );
   const pi = playerIndex();
@@ -1306,43 +1809,17 @@ function renderResources(workspace) {
       }),
     );
   }
-  const maxMaterials = button(
-    "Max synth materials + salvage + void",
-    () =>
-      applyResourceAction(
-        maxMaterialIds,
-        "max",
-        "all standard and alien synth materials, raw ingredients, Salvage, Void Matter, and Void Energy",
-      ),
-    "button primary",
-  );
-  maxMaterials.id = "resource-max-materials";
-  maxMaterials.title = `Fill all ${maxMaterialIds.length} synth material, raw ingredient, Salvage, Void Matter, and Void Energy balances to ${MAX_RESOURCE_AMOUNT} (one tenth of the numeric maximum), regardless of search. One undoable change.`;
-  const maxWarpBase = button(
-    "Max warp + base resources",
-    () =>
-      applyResourceAction(
-        maxWarpBaseIds,
-        "max",
-        "Warp Essence, Warp Residuum, all seven Skeins, building materials and parts for Bases 1–6, and all six component types plus their banked balances",
-      ),
-    "button primary",
-  );
-  maxWarpBase.id = "resource-max-warp-base";
-  maxWarpBase.title = `Fill all ${maxWarpBaseIds.length} warp currency, base material, part, component, and banked component balances to ${MAX_RESOURCE_AMOUNT}, regardless of search. One undoable change.`;
   controls.append(
     fillLabel,
-    maxMaterials,
-    maxWarpBase,
-    crewMasteryButton(),
     folds,
     node(
       "p",
       "muted resource-max-note",
-      `Synth and warp/base Max buttons fill to ${MAX_RESOURCE_AMOUNT}, regardless of search; higher balances stay unchanged. Overflow remains possible and Repair resets those balances. Crew mastery instead funds all active upgrades using earned mastery levels minus points spent. Keep a backup.`,
+      `Use Max balance on an individual material or currency; each action changes only that balance. The numeric target ${MAX_RESOURCE_AMOUNT} can still overflow in later calculations and is reset by Repair. Crew mastery uses source-backed earned-minus-spent accounting instead.`,
     ),
   );
   workspace.append(controls);
+  workspace.append(focusedActions());
   const unknown = Object.keys(values).filter((id) => !resourceCatalog.has(id));
   const groups = [...catalog.resourceGroups];
   if (unknown.length)
@@ -1411,7 +1888,7 @@ function renderResources(workspace) {
     node(
       "p",
       "resource-result-count",
-      `${shownCount} resource${shownCount === 1 ? "" : "s"} in ${groupList.childElementCount} group${groupList.childElementCount === 1 ? "" : "s"}${state.query ? " · Matching groups opened automatically. Group actions affect only shown results; Max buttons ignore search." : " · Expand a group to edit its balances."}`,
+      `${shownCount} resource${shownCount === 1 ? "" : "s"} in ${groupList.childElementCount} group${groupList.childElementCount === 1 ? "" : "s"}${state.query ? " · Matching groups opened automatically. Group actions affect only shown results; focused actions are independent of search." : " · Expand a group to edit its balances."}`,
     ),
   );
   if (!shownCount)
@@ -1609,10 +2086,18 @@ function renderAchievements(workspace) {
 }
 
 let applyDialog = null;
-function jsonDialog(title, text, onApply, help, fieldKey = false) {
+function jsonDialog(
+  title,
+  text,
+  onApply,
+  help,
+  fieldKey = false,
+  readOnly = false,
+) {
   if (!canNavigate()) return;
   $("#dialog-title").textContent = title;
   $("#json-text").value = text;
+  $("#json-text").readOnly = readOnly;
   $("#dialog-help").textContent = help;
   $("#json-error").textContent = "";
   $("#key-label").hidden = !fieldKey;

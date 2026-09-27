@@ -4,6 +4,11 @@ from collections import defaultdict
 from pathlib import Path
 import re
 
+from spec_metadata import build_spec_metadata
+from nested_metadata import build_nested_metadata
+from recipe_metadata import build_recipe_metadata
+from challenge_metadata import build_challenge_metadata
+
 
 # Scene families are also useful for inherited scripts shared by several systems.
 FAMILIES = {
@@ -185,7 +190,38 @@ def build_metadata(source: Path, tables: dict) -> dict:
                                   "crewSkills", "crewUpgrades", "cores", "fleet", "shards", "ships")}
     achievements = {}
     mastery_costs = {}
+    quick_upgrades = {target: {} for target in (
+        "synth_speed", "fixture_speed", "compute_base_spec_points", "research_datacore_start_with")}
+    stats = {row["id"]: row for row in tables.get("stats", [])}
+    mechanics = {}
     upgrade_rows = {row["id"]: row for sheet in ("upgrades", "upgrades2") for row in tables.get(sheet, [])}
+    ordinary_owners = {"upgrades/LimitedUpgradeButton.gd", "interface/warp/WarpUpgradeButton.gd",
+                       "interface/ai/AIUpgrade.gd"}
+    owners_by_upgrade = defaultdict(set)
+    for save_name, info in records.items():
+        if info.get("source"):
+            owners_by_upgrade[info.get("upgradeId", save_name)].add(info["source"])
+    base_purchases = {u["upgrade"] for base in tables.get("forward_bases", [])
+                      for u in base.get("upgrades", [])}
+
+    def mechanic_for(effect):
+        target = effect.get("target")
+        modifier = effect.get("modifier_type")
+        if target in stats and modifier in ("Flat", "Additive", "Multiplicative"):
+            identifier, stat = target, stats[target]
+        elif modifier == "FormulaModification" and target:
+            field = effect.get("mod_target", "")
+            identifier = f"formula:{target}:{field}"
+            target_name = _name(upgrade_rows[target]) if target in upgrade_rows else target
+            stat = {"name": f"{target_name} · {_humanize(field)}",
+                    "type": "Cost formulas" if field.startswith("cost_") else "Formula modifiers",
+                    "description": "Source formula modification; assignments and progression prerequisites still apply."}
+        else:
+            return None
+        return mechanics.setdefault(identifier, {
+            "name": _name(stat), "group": stat.get("type", "Other"),
+            "description": stat.get("description", ""), "upgrades": {}, "coupledUpgrades": {},
+            "uncapped": [], "unsupported": [], "otherSources": []})
     # IncreaseCap is applied at runtime, not a universal CastleDB ceiling.
     dynamic_caps = set()
 
@@ -216,11 +252,44 @@ def build_metadata(source: Path, tables: dict) -> dict:
                     or not float(costs[0]["cost_base"]).is_integer()):
                 raise ValueError(f"Unsupported crew mastery cost: {identifier}")
             mastery_costs[identifier] = int(costs[0]["cost_base"])
+        effects = row.get("effect", [])
+        if len(effects) == 1:
+            effect = effects[0]
+            target = effect.get("target")
+            speed = target in ("synth_speed", "fixture_speed") and kind == "synth"
+            points = target in ("compute_base_spec_points", "research_datacore_start_with") and kind in ("synth", "warp")
+            if speed or points:
+                if (identifier in dynamic_caps or not _positive(row.get("max_level"))
+                        or effect.get("modifier_type") != ("Multiplicative" if speed else "Flat")
+                        or effect.get("direct_connection") or effect.get("expression")):
+                    raise ValueError(f"Unsupported focused upgrade: {identifier}")
+                quick_upgrades[target][identifier] = int(row["max_level"])
         if identifier in dynamic_caps:
             item["note"] = "The game expands this cap at runtime; no universal maximum is supplied."
         else:
             _limit(item, "maxLevel", row.get("max_level"))
+        owners = owners_by_upgrade[identifier]
+        dynamic_limited = (kind in ("synth", "crew_mastery", "crew_mastery2", "crew_mastery3",
+                                   "splicing_humanity", "splicing_corruption")
+                           or re.fullmatch(r"fixture\d*", kind) or identifier in base_purchases)
+        item["actionable"] = bool("maxLevel" in item and (
+            (owners and owners <= ordinary_owners) or (not owners and dynamic_limited)))
         entities["upgrades"][identifier] = item
+        for effect in effects:
+            mechanic = mechanic_for(effect)
+            if mechanic is None:
+                continue
+            if item["actionable"]:
+                mechanic["upgrades" if len(effects) == 1 else "coupledUpgrades"][identifier] = item["maxLevel"]
+            elif "maxLevel" in item:
+                if identifier not in mechanic["unsupported"]:
+                    mechanic["unsupported"].append(identifier)
+            elif identifier not in mechanic["uncapped"]:
+                mechanic["uncapped"].append(identifier)
+        item["effects"] = list(dict.fromkeys(
+            _name(stats[e["target"]]) if e.get("target") in stats
+            else f'{e.get("modifier_type", "Effect")}: {e.get("target", "")}'
+            for e in effects))
         # Upgrade scenes may place a data family in Crew/Fleet rather than Progression.
         previous = records.get(identifier, {})
         category = previous.get("category", "Progression")
@@ -236,6 +305,28 @@ def build_metadata(source: Path, tables: dict) -> dict:
         identifier = info.get("upgradeId")
         if identifier in entities["upgrades"]:
             entities["upgrades"][save_name] = dict(entities["upgrades"][identifier])
+
+    def nested_effects(value):
+        if isinstance(value, dict):
+            if "modifier_type" in value and "target" in value:
+                yield value
+            for child in value.values():
+                yield from nested_effects(child)
+        elif isinstance(value, list):
+            for child in value:
+                yield from nested_effects(child)
+
+    for sheet, rows in tables.items():
+        if "@" in sheet or sheet in ("upgrades", "upgrades2"):
+            continue
+        for row in rows:
+            seen = set()
+            for effect in nested_effects(row):
+                mechanic = mechanic_for(effect)
+                if mechanic is not None and id(mechanic) not in seen:
+                    seen.add(id(mechanic))
+                    mechanic["otherSources"].append({"id": row.get("id", ""), "name": _name(row),
+                                                     "family": sheet})
 
     for row in tables.get("recipes", []):
         item = {"name": _name(row), "group": "Alien synthesis" if row.get("alien") else "Standard synthesis",
@@ -365,4 +456,9 @@ def build_metadata(source: Path, tables: dict) -> dict:
             entities["fleet"][row["id"]] = {"name": _name(row), "group": group}
 
     return {"records": dict(sorted(records.items())), "entities": entities, "achievements": achievements,
-            "crewMastery": {"upgradeCosts": mastery_costs}}
+            "crewMastery": {"upgradeCosts": mastery_costs},
+            "quickUpgrades": quick_upgrades, "mechanics": mechanics,
+            "specPoints": build_spec_metadata(source, tables),
+            "nestedBoosts": build_nested_metadata(tables),
+            "recipeBoosts": build_recipe_metadata(tables),
+            "challengeBoosts": build_challenge_metadata(source, tables)}

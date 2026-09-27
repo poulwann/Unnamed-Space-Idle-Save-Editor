@@ -648,6 +648,60 @@ kbd {
   flex-basis: 100%;
   max-width: none;
 }
+.focused-actions {
+  margin: 24px 0;
+}
+.focused-actions > summary {
+  font-size: 15px;
+  margin-bottom: 12px;
+  cursor: pointer;
+}
+.focused-actions-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
+  gap: 12px;
+}
+.focused-action {
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--panel);
+}
+.focused-action .button {
+  white-space: normal;
+}
+.focused-action p {
+  font-size: 11px;
+  margin: 12px 0 0;
+}
+.mechanic-row > .resource-quick-actions {
+  max-width: 230px;
+  justify-content: flex-end;
+}
+.mechanic-row code {
+  overflow-wrap: anywhere;
+}
+.mechanic-sources {
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 12px;
+}
+.mechanic-sources summary {
+  cursor: pointer;
+}
+.mechanic-sources ul {
+  padding-left: 18px;
+}
+.mechanic-sources li {
+  margin: 6px 0;
+}
+.mechanic-notice {
+  border-left: 2px solid var(--accent);
+  padding: 12px 16px;
+  margin: 0 0 20px;
+  font-size: 12px;
+  color: var(--muted);
+}
 .resource-fold-actions {
   display: flex;
   flex-wrap: wrap;
