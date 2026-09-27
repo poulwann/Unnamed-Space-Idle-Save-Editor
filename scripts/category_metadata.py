@@ -184,6 +184,7 @@ def build_metadata(source: Path, tables: dict) -> dict:
     entities = {key: {} for key in ("recipes", "modules", "research", "upgrades", "crew",
                                   "crewSkills", "crewUpgrades", "cores", "fleet", "shards", "ships")}
     achievements = {}
+    mastery_costs = {}
     upgrade_rows = {row["id"]: row for sheet in ("upgrades", "upgrades2") for row in tables.get(sheet, [])}
     # IncreaseCap is applied at runtime, not a universal CastleDB ceiling.
     dynamic_caps = set()
@@ -205,6 +206,16 @@ def build_metadata(source: Path, tables: dict) -> dict:
     for identifier, row in upgrade_rows.items():
         kind = row.get("type", "")
         item = {"name": _name(row), "group": GROUP_NAMES.get(kind, _humanize(kind).capitalize() or "Other upgrades"), "type": kind}
+        # CrewMasteryUpgradeArea.gd instantiates only these three active tiers.
+        if kind in ("crew_mastery", "crew_mastery2", "crew_mastery3"):
+            costs = row.get("cost", [])
+            if (row.get("max_level") != 1 or len(costs) != 1
+                    or costs[0].get("resource") != "MasteryPoint"
+                    or costs[0].get("type") != 1 or costs[0].get("cost_growth") != 0
+                    or not _positive(costs[0].get("cost_base"))
+                    or not float(costs[0]["cost_base"]).is_integer()):
+                raise ValueError(f"Unsupported crew mastery cost: {identifier}")
+            mastery_costs[identifier] = int(costs[0]["cost_base"])
         if identifier in dynamic_caps:
             item["note"] = "The game expands this cap at runtime; no universal maximum is supplied."
         else:
@@ -353,4 +364,5 @@ def build_metadata(source: Path, tables: dict) -> dict:
         for row in tables.get(sheet, []):
             entities["fleet"][row["id"]] = {"name": _name(row), "group": group}
 
-    return {"records": dict(sorted(records.items())), "entities": entities, "achievements": achievements}
+    return {"records": dict(sorted(records.items())), "entities": entities, "achievements": achievements,
+            "crewMastery": {"upgradeCosts": mastery_costs}}

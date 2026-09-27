@@ -18,6 +18,26 @@ never lowers higher ones, and ignores search filters. Only balances change:
 base layouts, upgrades, unlocks, and lifetime totals are untouched. Confirmation
 is required, and the entire action is undoable.
 
+## Crew mastery points
+
+**Mastery Components** are base resources, not the crew's **Mastery Points**.
+Use **Max crew mastery points** in either **Resources** or **Crew**.
+
+The game recalculates unspent `MasteryPoint` from the sum of
+`Crew.crew_load[*].mastery`, minus the cost of purchased mastery upgrades.
+A huge resource balance alone does not survive that reconciliation.
+
+The dedicated action funds all 33 active mastery upgrades: 64 total earned
+points in the recovered game. It raises the lowest unlocked crew mastery levels
+only as needed, preserves higher earned mastery, and sets unspent points to
+earned minus spent. For example, 18 points already spent leaves 46 available.
+The unused `crew_mastery_womp` tier is excluded.
+
+This changes mastery levels and their derived bonuses, but not ranks, skill XP,
+locked crew, purchased upgrades, or lifetime totals. It can lower an inconsistent
+previously edited point balance. It does not unlock missing crew or buy upgrades.
+Confirmation and one-step undo apply to the entire change.
+
 ## Repair overflow-risk values
 
 Open a save and select **Repair overflow values** beside the JSON editor. After

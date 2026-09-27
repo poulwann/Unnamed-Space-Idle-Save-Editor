@@ -4,6 +4,16 @@ import { makeNumeric, numericText } from "./codec.js";
 // One tenth of the largest finite binary64 value leaves arithmetic headroom.
 export const MAX_RESOURCE_AMOUNT = "1.7976931348623157e307";
 
+// Check integrality without rounding balances or progression through Number.
+export function isIntegerText(text) {
+  const match = /^-?(\d+)(?:\.(\d+))?(?:[eE]([+-]?\d+))?$/.exec(text);
+  if (!match) return false;
+  const digits = match[1] + (match[2] || "");
+  const places = (match[2]?.length || 0) - Number(match[3] || 0);
+  if (places <= 0) return true;
+  return /^0*$/.test(places >= digits.length ? digits : digits.slice(-places));
+}
+
 // Work limits, not balance caps. They bound every BigInt and decimal expansion.
 const MAX_DIGITS = 4096;
 const MAX_EXPONENT = 4096;

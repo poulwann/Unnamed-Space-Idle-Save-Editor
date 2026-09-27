@@ -24,6 +24,7 @@ import {
   OVERFLOW_REPAIR_EXPONENT,
   planOverflowRepairs,
 } from "./save-repair.js";
+import { planCrewMastery } from "./crew-mastery.js";
 
 const $ = (selector) => document.querySelector(selector);
 const app = $("#app");
@@ -666,13 +667,53 @@ function renderCategoryEntry(entry) {
   if (details.open) draw();
   return details;
 }
+function crewMasteryButton() {
+  const control = button(
+    "Max crew mastery points",
+    () => {
+      if (!canNavigate()) return;
+      try {
+        const plan = planCrewMastery(state.records, catalog);
+        if (!plan.changes.length) {
+          notice(
+            "Crew mastery already funds all active mastery upgrades; the point balance is consistent.",
+          );
+          return;
+        }
+        if (
+          !confirm(
+            `Fund all crew mastery upgrades?\n\nThe game requires ${plan.requiredTotal} total earned mastery points for its active upgrade tiers. Raise mastery levels on ${plan.raisedCrew} unlocked crew members as needed, then set available Mastery Points to ${plan.available} (${plan.total} earned minus ${plan.spent} spent).\n\nThis changes crew mastery levels and their derived bonuses, and reconciles the point balance even if a previous edit set it higher. Crew ranks, skill XP, unlocks, and purchased upgrades stay unchanged. Search does not limit this action.\n\nThis is one undoable change.`,
+          )
+        )
+          return;
+        commit(() => {
+          const player = state.records[plan.playerIndex];
+          if (!own(player, "resources_load"))
+            define(player, "resources_load", {});
+          for (const { path, value } of plan.changes) put(path, value);
+        }, true);
+        notice(
+          `Crew mastery funded: ${plan.available} points available (${plan.total} earned, ${plan.spent} spent). Undo restores mastery levels and the point balance.`,
+        );
+      } catch (error) {
+        notice(`Crew mastery action not applied: ${error.message}`, true);
+      }
+    },
+    "button primary",
+  );
+  control.id = "resource-max-crew-mastery";
+  control.title =
+    "Fund all active mastery upgrades by raising unlocked crew mastery levels and reconciling unspent points. Unlike the resource maxima, this does not use an extreme floating-point target.";
+  return control;
+}
+
 function renderRecords(workspace) {
   const descriptions = {
     Inventory:
       "Materials, modules, equipment and unlocks, organized by family and tier. Quick edits do not pay costs or award crafting rewards.",
     Progression:
       "Upgrades and progression systems, grouped by source family. Proven limits are respected; no arbitrary universal maximum is imposed.",
-    Crew: "Crew members, ranks, stats and upgrades. Editing levels does not recalculate XP requirements, mastery or rank-point accounting.",
+    Crew: "Crew members, ranks, stats and upgrades. Max crew mastery points funds all active mastery upgrades and reconciles earned and spent points. Manual field edits do not recalculate related progression.",
     Fleet:
       "Fleet systems, galaxies and events. Completion flags are independent; loading edited flags can trigger game effects. The editor does not rebuild battle state.",
     Research:
@@ -725,9 +766,12 @@ function renderRecords(workspace) {
     node(
       "p",
       "muted",
-      "Fill and max never reduce a value. Known caps are respected. Each bulk action is one undoable change.",
+      state.view === "Crew"
+        ? "Field fill and max never reduce a value. Crew mastery funding separately reconciles points with earned levels. Each bulk action is one undoable change."
+        : "Fill and max never reduce a value. Known caps are respected. Each bulk action is one undoable change.",
     ),
   );
+  if (state.view === "Crew") toolbar.append(crewMasteryButton());
   workspace.append(toolbar);
   const allEntries =
     state.view === "All records"
@@ -1290,11 +1334,12 @@ function renderResources(workspace) {
     fillLabel,
     maxMaterials,
     maxWarpBase,
+    crewMasteryButton(),
     folds,
     node(
       "p",
       "muted resource-max-note",
-      `Max buttons fill their full resource sets to ${MAX_RESOURCE_AMOUNT}, regardless of search. Higher balances stay unchanged. This is one tenth of the numeric maximum, not a gameplay cap; overflow remains possible. Repair resets balances at this target. Keep a backup.`,
+      `Synth and warp/base Max buttons fill to ${MAX_RESOURCE_AMOUNT}, regardless of search; higher balances stay unchanged. Overflow remains possible and Repair resets those balances. Crew mastery instead funds all active upgrades using earned mastery levels minus points spent. Keep a backup.`,
     ),
   );
   workspace.append(controls);

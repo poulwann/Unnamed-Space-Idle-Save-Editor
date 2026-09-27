@@ -1,5 +1,9 @@
 import { isNumeric, makeNumeric, numericText } from "./codec.js";
-import { addResourceAmount, fillResourceAmount } from "./resource-amounts.js";
+import {
+  addResourceAmount,
+  fillResourceAmount,
+  isIntegerText,
+} from "./resource-amounts.js";
 
 const own = (value, key) => value != null && Object.hasOwn(value, key);
 const composite = (value) =>
@@ -538,17 +542,6 @@ export function collectActionFields(records, catalog, entry) {
   };
   visit(atPath(records, entry.path), entry.path, []);
   return fields;
-}
-
-// Arithmetic and range checks use the same lossless decimal helper as resources.
-// In particular, neither integer checks nor cap comparisons round through Number.
-function isIntegerText(text) {
-  const match = /^-?(\d+)(?:\.(\d+))?(?:[eE]([+-]?\d+))?$/.exec(text);
-  if (!match) return false;
-  const digits = match[1] + (match[2] || "");
-  const places = (match[2]?.length || 0) - Number(match[3] || 0);
-  if (places <= 0) return true;
-  return /^0*$/.test(places >= digits.length ? digits : digits.slice(-places));
 }
 
 function exceeds(value, max) {
