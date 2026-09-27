@@ -60,6 +60,17 @@ const maxMaterialIds = catalog.resources
       ["Salvage", "VoidMatter", "VoidEnergy"].includes(item.id),
   )
   .map((item) => item.id);
+// CastleDB's Warp/Base types include every building input/output. PlayerInfo.gd
+// banks base components under "Banked" + resource ID on prestige.
+const maxWarpBaseIds = catalog.resources
+  .filter(
+    (item) =>
+      item.type === "Warp" ||
+      item.type === "Base" ||
+      (item.id.startsWith("Banked") &&
+        resourceCatalog.get(item.id.slice(6))?.type === "Base"),
+  )
+  .map((item) => item.id);
 const formats = {
   godot4: "Godot 4 encrypted",
   godot3: "Godot 3 encrypted",
@@ -1019,7 +1030,7 @@ function resourceBalance(id) {
   return own(values, id) ? values[id] : makeNumeric("0");
 }
 
-function applyResourceAction(ids, mode) {
+function applyResourceAction(ids, mode, maxScope) {
   if (!canNavigate()) return;
   try {
     const target =
@@ -1059,7 +1070,7 @@ function applyResourceAction(ids, mode) {
       ids.length > 1 &&
       !confirm(
         mode === "max"
-          ? `Fill ${changed.length} balances to ${MAX_RESOURCE_AMOUNT}?\n\nIncludes all standard and alien synth materials, raw ingredients, Salvage, Void Matter, and Void Energy, regardless of search. Missing balances will be added; higher balances are not reduced. Recipes, unlocks, and lifetime totals stay unchanged.\n\nThis is one tenth of the largest finite Godot float, leaving arithmetic headroom. It is not a gameplay cap; later calculations can still overflow. Keep a backup.\n\nThis is one undoable change.`
+          ? `Fill ${changed.length} balances to ${MAX_RESOURCE_AMOUNT}?\n\nIncludes ${maxScope}, regardless of search. Missing balances will be added; higher balances are not reduced. Layouts, recipes, upgrades, unlocks, and lifetime totals stay unchanged.\n\nThis is one tenth of the largest finite Godot float, leaving arithmetic headroom. It is not a gameplay cap; later calculations can still overflow. Repair overflow values will reset balances at this target. Keep a backup.\n\nThis is one undoable change.`
           : `${description} ${changed.length} resources in this shown group? Missing balances will be added. Higher balances are never reduced by Fill. This is one undoable change.`,
       )
     )
@@ -1253,20 +1264,38 @@ function renderResources(workspace) {
   }
   const maxMaterials = button(
     "Max synth materials + salvage + void",
-    () => applyResourceAction(maxMaterialIds, "max"),
+    () =>
+      applyResourceAction(
+        maxMaterialIds,
+        "max",
+        "all standard and alien synth materials, raw ingredients, Salvage, Void Matter, and Void Energy",
+      ),
     "button primary",
   );
   maxMaterials.id = "resource-max-materials";
   maxMaterials.title = `Fill all ${maxMaterialIds.length} synth material, raw ingredient, Salvage, Void Matter, and Void Energy balances to ${MAX_RESOURCE_AMOUNT} (one tenth of the numeric maximum), regardless of search. One undoable change.`;
+  const maxWarpBase = button(
+    "Max warp + base resources",
+    () =>
+      applyResourceAction(
+        maxWarpBaseIds,
+        "max",
+        "Warp Essence, Warp Residuum, all seven Skeins, building materials and parts for Bases 1–6, and all six component types plus their banked balances",
+      ),
+    "button primary",
+  );
+  maxWarpBase.id = "resource-max-warp-base";
+  maxWarpBase.title = `Fill all ${maxWarpBaseIds.length} warp currency, base material, part, component, and banked component balances to ${MAX_RESOURCE_AMOUNT}, regardless of search. One undoable change.`;
   controls.append(
     fillLabel,
     maxMaterials,
+    maxWarpBase,
+    folds,
     node(
       "p",
-      "muted",
-      `Fill never lowers balances. Max fills all synth materials, raw ingredients, Salvage, Void Matter, and Void Energy to ${MAX_RESOURCE_AMOUNT}, regardless of search. This is one tenth of the numeric maximum, leaving headroom; later calculations can still overflow. Keep a backup.`,
+      "muted resource-max-note",
+      `Max buttons fill their full resource sets to ${MAX_RESOURCE_AMOUNT}, regardless of search. Higher balances stay unchanged. This is one tenth of the numeric maximum, not a gameplay cap; overflow remains possible. Repair resets balances at this target. Keep a backup.`,
     ),
-    folds,
   );
   workspace.append(controls);
   const unknown = Object.keys(values).filter((id) => !resourceCatalog.has(id));
@@ -1337,7 +1366,7 @@ function renderResources(workspace) {
     node(
       "p",
       "resource-result-count",
-      `${shownCount} resource${shownCount === 1 ? "" : "s"} in ${groupList.childElementCount} group${groupList.childElementCount === 1 ? "" : "s"}${state.query ? " · Matching groups opened automatically. Group actions affect only shown results; Max synth ignores search." : " · Expand a group to edit its balances."}`,
+      `${shownCount} resource${shownCount === 1 ? "" : "s"} in ${groupList.childElementCount} group${groupList.childElementCount === 1 ? "" : "s"}${state.query ? " · Matching groups opened automatically. Group actions affect only shown results; Max buttons ignore search." : " · Expand a group to edit its balances."}`,
     ),
   );
   if (!shownCount)

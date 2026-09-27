@@ -644,6 +644,10 @@ kbd {
   margin: 0;
   font-size: 11px;
 }
+.resource-toolbar .resource-max-note {
+  flex-basis: 100%;
+  max-width: none;
+}
 .resource-fold-actions {
   display: flex;
   flex-wrap: wrap;
