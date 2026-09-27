@@ -1149,6 +1149,8 @@ dialog::backdrop {
   }
   .tools {
     margin-left: auto;
+    flex-wrap: wrap;
+    justify-content: flex-end;
   }
   .welcome {
     margin-top: 25px;

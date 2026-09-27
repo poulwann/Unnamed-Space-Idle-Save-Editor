@@ -20,6 +20,10 @@ import {
   collectActionFields,
   planFieldAction,
 } from "./category-model.js";
+import {
+  OVERFLOW_REPAIR_EXPONENT,
+  planOverflowRepairs,
+} from "./save-repair.js";
 
 const $ = (selector) => document.querySelector(selector);
 const app = $("#app");
@@ -195,6 +199,8 @@ function updateToolbar() {
   $("#navigation").inert = state.busy;
   $("#save").disabled = !loaded || state.busy || !!state.invalid.size;
   $("#raw").disabled = !loaded || state.busy;
+  $("#repair-overflow").disabled =
+    !loaded || state.busy || !!state.invalid.size;
   $("#undo").disabled = !loaded || !state.history.length || state.busy;
   $("#redo").disabled = !loaded || !state.future.length || state.busy;
   $("#open").disabled = state.busy;
@@ -225,6 +231,39 @@ app.innerHTML = `
   <input id="file-input" type="file" accept=".save,.txt,.json,.OLDENGINEsave" hidden>
   <dialog id="edit-dialog"><form method="dialog" class="dialog-form"><div class="dialog-heading"><div><div class="eyebrow">ADVANCED EDITOR</div><h2 id="dialog-title"></h2></div><button value="cancel" class="icon-button" aria-label="Close dialog">×</button></div><p id="dialog-help" class="muted"></p><label id="key-label" hidden>Field name<input id="field-key" type="text" autocomplete="off"></label><textarea id="json-text" spellcheck="false" aria-label="JSON value"></textarea><p id="json-error" role="alert" class="error-text"></p><div class="dialog-actions"><button value="cancel" class="button">Cancel</button><button id="apply-json" type="button" class="button primary">Apply changes</button></div></form></dialog>
 `;
+const repairOverflow = button(
+  "Repair overflow values",
+  () => {
+    if (!state.records || state.busy || !canNavigate()) return;
+    try {
+      const paths = planOverflowRepairs(state.records);
+      if (!paths.length) {
+        notice(
+          `No numeric values with magnitude at or above 1e${OVERFLOW_REPAIR_EXPONENT} need repair.`,
+        );
+        return;
+      }
+      if (
+        !confirm(
+          `Reset ${paths.length} numeric value${paths.length === 1 ? "" : "s"} to 0?\n\nScans the entire save, regardless of category or search. Positive and negative values with magnitude at or above 1e${OVERFLOW_REPAIR_EXPONENT} are reset, including resource balances, lifetime totals, and other numeric fields.\n\nSmaller values, strings, and null entries are unchanged. This cannot reconstruct values already lost to overflow or prevent every future overflow. Keep a backup.\n\nThis is one undoable change.`,
+        )
+      )
+        return;
+      commit(() => {
+        for (const path of paths) put(path, makeNumeric("0"));
+      }, true);
+      notice(
+        `Repaired ${paths.length} overflow-risk value${paths.length === 1 ? "" : "s"} by resetting to 0. Undo restores the entire change.`,
+      );
+    } catch (error) {
+      notice(`Overflow repair not applied: ${error.message}`, true);
+    }
+  },
+  "button danger",
+);
+repairOverflow.id = "repair-overflow";
+repairOverflow.title = `Reset numeric values with magnitude at or above 1e${OVERFLOW_REPAIR_EXPONENT} to 0 across the entire save. Includes values near 1e305. One undoable change.`;
+$(".tools").insertBefore(repairOverflow, $("#raw"));
 
 function renderNavigation() {
   const nav = $("#navigation");
